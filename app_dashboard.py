@@ -94,26 +94,37 @@ st.markdown("""
 # --- Geocoding Function ---
 @st.cache_data(ttl=3600) # Cache geocoding results for an hour
 def geocode_location(location_str):
-    geolocator = Nominatim(user_agent="climate_risk_analyzer_app")
-    try:
-        # Increase timeout for robustness
-        location = geolocator.geocode(location_str, timeout=10)
-        if location:
-            return {
-                "city": location.raw.get('address', {}).get('city', location.raw.get('address', {}).get('town', 'N/A')),
-                "state_region": location.raw.get('address', {}).get('state', location.raw.get('address', {}).get('region', 'N/A')),
-                "country": location.raw.get('address', {}).get('country', 'N/A'),
-                "latitude": location.latitude,
-                "longitude": location.longitude
-            }
-        else:
+    geolocator = Nominatim(user_agent="climate_risk_analyzer_app_v1")
+    max_retries = 3
+    retry_delay_seconds = 1.5
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            # Increase timeout for robustness
+            location = geolocator.geocode(location_str, timeout=10)
+            if location:
+                return {
+                    "city": location.raw.get('address', {}).get('city', location.raw.get('address', {}).get('town', 'N/A')),
+                    "state_region": location.raw.get('address', {}).get('state', location.raw.get('address', {}).get('region', 'N/A')),
+                    "country": location.raw.get('address', {}).get('country', 'N/A'),
+                    "latitude": location.latitude,
+                    "longitude": location.longitude
+                }
             return None
-    except (GeocoderTimedOut, GeocoderServiceError) as e:
-        st.error(f"Geocoding service error: {e}. Please try again or use Latitude/Longitude.")
-        return None
-    except Exception as e:
-        st.error(f"An unexpected error occurred during geocoding: {e}")
-        return None
+        except (GeocoderTimedOut, GeocoderServiceError) as e:
+            is_rate_limit_error = "429" in str(e)
+            can_retry = attempt < max_retries and (is_rate_limit_error or isinstance(e, GeocoderTimedOut))
+
+            if can_retry:
+                time.sleep(retry_delay_seconds)
+                retry_delay_seconds *= 2
+                continue
+
+            st.error(f"Geocoding service error: {e}. Please try again or use Latitude/Longitude.")
+            return None
+        except Exception as e:
+            st.error(f"An unexpected error occurred during geocoding: {e}")
+            return None
 
 # --- Risk Assessment Logic (Simplified for demonstration) ---
 # In a real application, this would involve complex models, data lookups from
@@ -404,6 +415,10 @@ def main():
                     lon = None
 
                     if asset_input['location_str']:
+                        # Nominatim usage policy recommends spacing requests to avoid rate limits.
+                        # This pause only applies on non-cached calls.
+                        if analysis_mode == "Portfolio Analysis (CSV Upload)" and asset_num > 0:
+                            time.sleep(1.1)
                         loc_data = geocode_location(asset_input['location_str'])
                         if loc_data:
                             lat = loc_data['latitude']
