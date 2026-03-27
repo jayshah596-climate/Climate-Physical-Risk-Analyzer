@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from geopy.geocoders import Nominatim
+from geopy.geocoders import Nominatim, Photon
 from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 import time
 import matplotlib.pyplot as plt
@@ -92,28 +92,59 @@ st.markdown("""
 
 
 # --- Geocoding Function ---
-@st.cache_data(ttl=3600) # Cache geocoding results for an hour
 def geocode_location(location_str):
-    geolocator = Nominatim(user_agent="climate_risk_analyzer_app_v1")
-    max_retries = 3
-    retry_delay_seconds = 1.5
+   cache_key = location_str.strip().lower()
+    geocode_cache = st.session_state.setdefault("geocode_cache", {})
+    if cache_key in geocode_cache:
+        return geocode_cache[cache_key]
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            # Increase timeout for robustness
-            location = geolocator.geocode(location_str, timeout=10)
-            if location:
-                return {
-                    "city": location.raw.get('address', {}).get('city', location.raw.get('address', {}).get('town', 'N/A')),
-                    "state_region": location.raw.get('address', {}).get('state', location.raw.get('address', {}).get('region', 'N/A')),
-                    "country": location.raw.get('address', {}).get('country', 'N/A'),
-                    "latitude": location.latitude,
-                    "longitude": location.longitude
-                }
-            return None
-        except (GeocoderTimedOut, GeocoderServiceError) as e:
-            is_rate_limit_error = "429" in str(e)
-            can_retry = attempt < max_retries and (is_rate_limit_error or isinstance(e, GeocoderTimedOut))
+    providers = [
+        ("Nominatim", Nominatim(user_agent="climate_risk_analyzer_app_v2")),
+        ("Photon", Photon(user_agent="climate_risk_analyzer_app_v2")),
+    ]
+    max_retries = 3
+
+    def _normalize_location(location_obj):
+        address = location_obj.raw.get('address', {}) if isinstance(location_obj.raw, dict) else {}
+        return {
+            "city": address.get('city', address.get('town', address.get('county', 'N/A'))),
+            "state_region": address.get('state', address.get('region', 'N/A')),
+            "country": address.get('country', 'N/A'),
+            "latitude": location_obj.latitude,
+            "longitude": location_obj.longitude
+        }
+
+    for provider_name, geolocator in providers:
+        retry_delay_seconds = 1.2
+        for attempt in range(1, max_retries + 1):
+            try:
+                location = geolocator.geocode(location_str, timeout=10)
+                if location:
+                    normalized = _normalize_location(location)
+                    geocode_cache[cache_key] = normalized  # Cache successful lookups only.
+                    return normalized
+                break  # Not found on this provider; move to next provider.
+            except (GeocoderTimedOut, GeocoderServiceError) as e:
+                is_rate_limit_error = "429" in str(e)
+                can_retry = attempt < max_retries and (is_rate_limit_error or isinstance(e, GeocoderTimedOut))
+
+                if can_retry:
+                    time.sleep(retry_delay_seconds)
+                    retry_delay_seconds *= 2
+                    continue
+
+                # If Nominatim is rate-limited, fall back to Photon before surfacing hard error.
+                if provider_name == "Nominatim" and is_rate_limit_error:
+                    st.warning("Nominatim is rate-limited right now; trying backup geocoding provider.")
+                    break
+
+                # For non-rate-limit issues, try next provider if available.
+                break
+            except Exception:
+                break
+
+    st.error("Geocoding failed across available providers. Please try again or use Latitude/Longitude.")
+    return None
 
             if can_retry:
                 time.sleep(retry_delay_seconds)
