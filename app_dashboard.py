@@ -92,8 +92,9 @@ st.markdown("""
 
 
 # --- Geocoding Function ---
-def geocode_location(location_str):
    cache_key = location_str.strip().lower()
+"""Geocode a user-entered location with retries and provider fallback."""
+    cache_key = location_str.strip().lower()
     geocode_cache = st.session_state.setdefault("geocode_cache", {})
     if cache_key in geocode_cache:
         return geocode_cache[cache_key]
@@ -127,7 +128,6 @@ def geocode_location(location_str):
             except (GeocoderTimedOut, GeocoderServiceError) as e:
                 is_rate_limit_error = "429" in str(e)
                 can_retry = attempt < max_retries and (is_rate_limit_error or isinstance(e, GeocoderTimedOut))
-
                 if can_retry:
                     time.sleep(retry_delay_seconds)
                     retry_delay_seconds *= 2
@@ -145,18 +145,6 @@ def geocode_location(location_str):
 
     st.error("Geocoding failed across available providers. Please try again or use Latitude/Longitude.")
     return None
-
-            if can_retry:
-                time.sleep(retry_delay_seconds)
-                retry_delay_seconds *= 2
-                continue
-
-            st.error(f"Geocoding service error: {e}. Please try again or use Latitude/Longitude.")
-            return None
-        except Exception as e:
-            st.error(f"An unexpected error occurred during geocoding: {e}")
-            return None
-
 # --- Risk Assessment Logic (Simplified for demonstration) ---
 # In a real application, this would involve complex models, data lookups from
 # climate databases (e.g., Copernicus, NOAA, custom datasets), and scientific assessment.
